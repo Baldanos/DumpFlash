@@ -12,7 +12,7 @@ import uboot
 import ecc
 
 class IO:
-    def __init__(self, filename = '', base_offset = 0, length = 0, page_size = 0x800, oob_size = 0x40, page_per_block = 0x40, slow = False):
+    def __init__(self, filename = '', base_offset = 0, length = 0, page_size = 0x800, oob_size = 0x40, page_per_block = 0x40, device = '/dev/ttyACM0', use_sd = False):
         self.UseAnsi = False
         self.UseSequentialMode = False
         self.DumpProgress = True
@@ -21,7 +21,7 @@ class IO:
         if filename:
             self.SrcImage = flashfile.IO(filename, base_offset = base_offset, length = length, page_size = page_size, oob_size = oob_size, page_per_block = page_per_block)
         else:
-            self.SrcImage = flashdevice.IO(slow)
+            self.SrcImage = flashdevice.IO(device = device, use_sd = use_sd)
 
     def is_initialized(self):
         return self.SrcImage.is_initialized()
@@ -217,7 +217,10 @@ class IO:
         return whole_data
 
     def read_seq_pages(self, start_page = -1, end_page = -1, remove_oob = False, filename = '', append = False, maximum = 0, raw_mode = False):
-        if filename:
+        if self.use_sd:
+            if self.io.EnableSD() == False:
+                return
+        elif filename:
             if append:
                 fd = open(filename, 'ab')
             else:

@@ -8,15 +8,16 @@ import uboot
 
 parser = OptionParser()
 
-parser.add_option("-c", dest = "command", default = "information", help = "Command (i[nformation], r[ead], s[equential_read], w[rite], erase, e[xtract], extract_pages, add_oob, remove_oob, check_ecc, find_uboot, dump_uboot,find_jffs2, dump_jffs2, check_bad_blocks)")
+parser.add_option("-c", dest = "command", default = "information", help = "Command (i[nformation], r[ead], s[equential_read], w[rite], ERASE, e[xtract], extract_pages, add_oob, remove_oob, check_ecc, find_uboot, dump_uboot,find_jffs2, dump_jffs2, check_bad_blocks)")
+parser.add_option("-d", action="store", dest="serialdevice", default="/dev/ttyACM0", help="Serial interface")
 parser.add_option("-i", dest = "raw_image_filename", default = '', help = "Use file instead of device for operations")
 parser.add_option("-o", dest = "output_filename", default = 'output.dmp', help = "Output filename")
 
-parser.add_option("-L", action = "store_true", dest = "slow", default = False, help = "Set clock FTDI chip at 12MHz instead of 60MHz")
 parser.add_option("-R", action = "store_true", dest = "raw_mode", default = False, help = "Raw mode - skip bad block before reading/writing")
 
 parser.add_option("-j", action = "store_true", dest = "add_jffs2_oob", default = False, help = "Add JFFS2 OOB to the source")
 parser.add_option("-C", dest = "compare_target_filename", default = '', help = "When writing a file compare with this file before writing and write only differences", metavar = "COMPARE_TARGET_FILENAME")
+parser.add_option("--sd", action="store_true", dest="use_sd", default=False, help="Write to Hydrabus SD card instead of host (cannot be used with -R)")
 
 parser.add_option("-n", dest = "name_prefix", default = '', help = "Set output file name prefix")
 
@@ -50,7 +51,7 @@ if options.pages is not None:
     if len(options.pages) > 1:
         end_page = options.pages[1]
 
-flash_image_io = flashimage.IO(options.raw_image_filename, options.start_offset, options.length, options.page_size, options.oob_size, options.pages_per_block, options.slow)
+flash_image_io = flashimage.IO(options.raw_image_filename, options.start_offset, options.length, options.page_size, options.oob_size, options.pages_per_block, options.serialdevice, options.use_sd)
 
 if not flash_image_io.is_initialized():
     print('Device not ready, aborting...')
@@ -145,7 +146,7 @@ elif options.command[0] == 'w':
     else:
         flash_image_io.SrcImage.write_pages(filename, options.start_offset, start_page, end_page, add_oob, add_jffs2_eraser_marker = add_jffs2_eraser_marker, raw_mode = options.raw_mode)
 
-elif options.command == 'erase':
+elif options.command == 'ERASE':
     if options.blocks is not None:
         start = options.blocks[0]
         end = options.blocks[1]

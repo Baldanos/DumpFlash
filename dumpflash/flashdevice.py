@@ -5,12 +5,13 @@ import time
 import struct
 import sys
 import traceback
-from pyftdi import ftdi
+import serial
+import struct
 import ecc
 import flashdevice_defs
 
 class IO:
-    def __init__(self, do_slow = False, debug = 0, simulation_mode = False):
+    def __init__(self, device='/dev/ttyACM0', use_sd = False, debug = 0, simulation_mode = False):
         self.Debug = debug
         self.PageSize = 0
         self.OOBSize = 0
@@ -23,114 +24,91 @@ class IO:
         self.RemoveOOB = False
         self.UseSequentialMode = False
         self.UseAnsi = False
-        self.Slow = do_slow
         self.Identified = False
         self.SimulationMode = simulation_mode
 
-        try:
-            self.ftdi = ftdi.Ftdi()
-        except:
-            print("Error openging FTDI device")
-            self.ftdi = None
+        self.ser = serial.Serial(device)
+        self.use_sd = use_sd
 
-        if self.ftdi is not None:
-            try:
-                self.ftdi.open(0x0403, 0x6010, interface = 1)
-            except:
-                traceback.print_exc(file = sys.stdout)
+        for i in range(20):
+            self.ser.write(b'\x00')
+        if b"BBIO1" not in self.ser.read(5):
+            print("Could not get into bbIO mode")
+            quit()
+        else:
+            if self.Debug > 0:
+                print("Into BBIO mode")
 
-            if self.ftdi.is_connected:
-                self.ftdi.set_bitmode(0, self.ftdi.BITMODE_MCU)
+        self.ser.write(b'\x0A')
+        if b"FLA1" not in  self.ser.read(4):
+            print("Cannot set flash mode")
+            quit()
+        else:
+            if self.Debug > 0:
+                print("Switched to flash mode")
 
-                if self.Slow:
-                    # Clock FTDI chip at 12MHz instead of 60MHz
-                    self.ftdi.write_data(Array('B', [ftdi.Ftdi.ENABLE_CLK_DIV5]))
-                else:
-                    self.ftdi.write_data(Array('B', [ftdi.Ftdi.DISABLE_CLK_DIV5]))
-
-                self.ftdi.set_latency_timer(self.ftdi.LATENCY_MIN)
-                self.ftdi.purge_buffers()
-                self.ftdi.write_data(Array('B', [ftdi.Ftdi.SET_BITS_HIGH, 0x0, 0x1]))
+        self.ser.write(b'\x02')
+        if self.ser.read(1) != b'\x01':
+            print("Error setting chip en low")
+            quit()
+        else:
+            if self.Debug > 0:
+                print("NAND flash enabled")
 
         self.__wait_ready()
         self.__get_id()
 
+    def __del__(self):
+        if self.use_sd:
+            self.__disable_sd()
+        self.ser.write(b'\x00')
+        self.ser.write(b'\x0f\n')
+        self.ser.close()
+
+    def __enable_sd(self):
+        if not self.use_sd:
+            self.ser.write(b'\x0b')
+            if self.ser.read(1) != b'\x01':
+                print("Error enabling SD card write")
+
+    def __disable_sd(self):
+        if self.use_sd:
+            self.ser.write(b'\x0a')
+            self.ser.read(1)
+
+
     def __wait_ready(self):
-        if self.ftdi is None or not self.ftdi.is_connected:
-            return
-
         while 1:
-            self.ftdi.write_data(Array('B', [ftdi.Ftdi.GET_BITS_HIGH]))
-            data = self.ftdi.read_data_bytes(1)
-            if not data or len(data) <= 0:
-                raise Exception('FTDI device Not ready. Try restarting it.')
-
-            if  data[0] & 2 == 0x2:
+            self.ser.write(b'\x08')
+            if self.ser.read(1) != b'\x01':
+                if self.Debug > 0:
+                    print('Not Ready')
+            else:
                 return
 
-            if self.Debug > 0:
-                print('Not Ready', data)
-
-        return
-
-    def __read(self, cl, al, count):
-        cmds = []
-        cmd_type = 0
-        if cl == 1:
-            cmd_type |= flashdevice_defs.ADR_CL
-        if al == 1:
-            cmd_type |= flashdevice_defs.ADR_AL
-
-        cmds += [ftdi.Ftdi.READ_EXTENDED, cmd_type, 0]
-
-        for _ in range(1, count, 1):
-            cmds += [ftdi.Ftdi.READ_SHORT, 0]
-
-        cmds.append(ftdi.Ftdi.SEND_IMMEDIATE)
-
-        if self.ftdi is None or not self.ftdi.is_connected:
-            return
-
-        self.ftdi.write_data(Array('B', cmds))
-        if self.is_slow_mode():
-            data = self.ftdi.read_data_bytes(count*2)
-            data = data[0:-1:2]
-        else:
-            data = self.ftdi.read_data_bytes(count)
-        return bytes(data)
-
-    def __write(self, cl, al, data):
-        cmds = []
-        cmd_type = 0
-        if cl == 1:
-            cmd_type |= flashdevice_defs.ADR_CL
-        if al == 1:
-            cmd_type |= flashdevice_defs.ADR_AL
-        if not self.WriteProtect:
-            cmd_type |= flashdevice_defs.ADR_WP
-
-        cmds += [ftdi.Ftdi.WRITE_EXTENDED, cmd_type, 0, ord(data[0])]
-        for i in range(1, len(data), 1):
-            #if i == 256:
-            #    cmds += [Ftdi.WRITE_SHORT, 0, ord(data[i])]
-            cmds += [ftdi.Ftdi.WRITE_SHORT, 0, ord(data[i])]
-
-        if self.ftdi is None or not self.ftdi.is_connected:
-            return
-
-        self.ftdi.write_data(Array('B', cmds))
-
     def __send_cmd(self, cmd):
-        self.__write(1, 0, chr(cmd))
+        self.ser.write(b'\x06'+ bytes([cmd]))
+        if self.ser.read(1) != b'\x01':
+            print("Error setting command")
+            if self.Debug > 0:
+                print("Was " + hex(cmd))
+            quit()
+
 
     def __send_address(self, addr, count):
-        data = ''
+        data = b''
 
         for _ in range(0, count, 1):
-            data += chr(addr & 0xff)
+            data += bytes([(addr & 0xff)])
             addr = addr>>8
 
-        self.__write(0, 1, data)
+        self.ser.write(bytes([0x10+(count-1)]))
+        self.ser.write(data)
+        if self.ser.read(1) != b'\x01':
+            print("Error setting address")
+            if self.Debug > 0:
+                print("Was " + data.encode('hex'))
+            quit()
 
     def __get_status(self):
         self.__send_cmd(0x70)
@@ -138,10 +116,31 @@ class IO:
         return status
 
     def __read_data(self, count):
-        return self.__read(0, 0, count)
+        self.ser.write(b"\x04\x00\x00"+struct.pack('>h',count))
+        if self.ser.read(1) == b'\x01':
+            if not self.use_sd:
+                data = self.ser.read(count)
+            else:
+                data = bytes(count)
+            return data
+        else:
+            print("Error getting data")
+            if self.Debug > 0:
+                print("Should have read " + str(count) + " bytes")
+            quit()
 
     def __write_data(self, data):
-        return self.__write(0, 0, data)
+        self.ser.write(b'\x04'+struct.pack('>h',len(data))+b"\x00\x00")
+        self.ser.write(data)
+
+        #TODO There's a bug in hydrafw, where the return value is not send directly after the command
+        # For the moment, we just send a IDENTIFY command and discard unused bytes
+        self.ser.write(b'\x01')
+        if self.ser.read(1) != b'\x01':
+            print("Error sending data")
+            quit()
+        self.ser.read(4)
+        return
 
     def __get_id(self):
         self.Name = ''
@@ -292,9 +291,6 @@ class IO:
     def set_use_ansi(self, use_ansi):
         self.UseAnsi = use_ansi
 
-    def is_slow_mode(self):
-        return self.Slow
-
     def get_bits_per_cell(self, cellinfo):
         bits = cellinfo & flashdevice_defs.NAND_CI_CELLTYPE_MSK
         bits >>= flashdevice_defs.NAND_CI_CELLTYPE_SHIFT
@@ -343,7 +339,7 @@ class IO:
         return bad_blocks
 
     def read_oob(self, pageno):
-        bytes_to_send = []
+        bytes_to_send = b''
         if self.Options & flashdevice_defs.LP_OPTIONS:
             self.__send_cmd(flashdevice_defs.NAND_CMD_READ0)
             self.__send_address((pageno<<16), self.AddrCycles)
@@ -357,15 +353,13 @@ class IO:
             self.__wait_ready()
             bytes_to_send += self.__read_data(self.OOBSize)
 
-        data = ''
-
-        for ch in bytes_to_send:
-            data += chr(ch)
-        return data
+        return bytes_to_send
 
     def read_page(self, pageno, remove_oob = False):
         bytes_to_read = bytearray()
 
+        if self.use_sd:
+            self.__enable_sd()
         if self.Options & flashdevice_defs.LP_OPTIONS:
             self.__send_cmd(flashdevice_defs.NAND_CMD_READ0)
             self.__send_address(pageno<<16, self.AddrCycles)
@@ -427,11 +421,11 @@ class IO:
 
             self.__wait_ready()
 
-        if self.ftdi is None or not self.ftdi.is_connected:
-            return ''
+        #if self.ftdi is None or not self.ftdi.is_connected:
+        #    return ''
 
-        self.ftdi.write_data(Array('B', [ftdi.Ftdi.SET_BITS_HIGH, 0x1, 0x1]))
-        self.ftdi.write_data(Array('B', [ftdi.Ftdi.SET_BITS_HIGH, 0x0, 0x1]))
+        #self.ftdi.write_data(Array('B', [ftdi.Ftdi.SET_BITS_HIGH, 0x1, 0x1]))
+        #self.ftdi.write_data(Array('B', [ftdi.Ftdi.SET_BITS_HIGH, 0x0, 0x1]))
 
         data = ''
 
@@ -552,7 +546,7 @@ class IO:
                     for pageoff in range(0, 2, 1):
                         oob = self.read_oob(page+pageoff)
 
-                        if oob[5] != b'\xff':
+                        if oob[5] != 0xff:
                             bad_block_found = True
                             break
 
@@ -612,6 +606,10 @@ class IO:
     def erase(self):
         block = 0
         while block < self.BlockCount:
+            if self.UseAnsi:
+                sys.stdout.write('Erasing block %d%% Block: %d/%d\n\033[A' % (block / self.BlockCount*100.0, block, self.BlockCount))
+            else:
+                sys.stdout.write('Erasing block %d%% Block: %d/%d\n' % (block / self.BlockCount*100.0, block, self.BlockCount))
             self.erase_block_by_page(block * self.PagePerBlock)
             block += 1
 
