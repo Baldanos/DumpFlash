@@ -1,7 +1,7 @@
 # DumpFlash-Hydrabus
 DumpFlash is a tool to retrieve and write Flash data to the physical NAND Flash memory or virtual image file. Various operations like ECC check and on-image pattern recognition, extraction and rewriting for u-Boot bootloader and JFFS2 file system are supported.
 
-This fork is made to be used with Hydrabus
+This fork is made to be used with Hydrabus using [HydraBus v1 hardware](https://hydrabus.com/hydrabus-1-0-specifications) + Shield HydraFlash (see https://github.com/hydrabus/HydraFlash)
 
 ---
 ## Prerequisites
